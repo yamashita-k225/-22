@@ -18,10 +18,7 @@
   header { padding:12px 16px; display:flex; gap:8px; align-items:center; }
   header label { font-size:14px; }
   header input { flex:1; font-size:18px; padding:8px; border-radius:6px; border:0; }
-  #cam { position:relative; width:100%; max-width:480px; margin:0 auto; display:none; }
-  #video { width:100%; display:block; background:#000; }
-  #guide { position:absolute; left:6%; right:6%; top:50%; height:0;
-    border-top:3px solid rgba(255,60,60,.85); pointer-events:none; }
+  #reader { width:100%; max-width:480px; margin:0 auto; }
   #result { flex:1; display:flex; flex-direction:column;
     align-items:center; justify-content:center; text-align:center; padding:16px; }
   #mark { font-size:96px; font-weight:700; line-height:1.1; }
@@ -48,10 +45,7 @@
   <label for="course">コース</label>
   <input id="course" value="池袋">
 </header>
-<div id="cam">
-  <video id="video" playsinline muted autoplay></video>
-  <div id="guide"></div>
-</div>
+<div id="reader"></div>
 <div id="status">「カメラを開始」を押してください</div>
 <div id="result">
   <div id="mark">待機中</div>
@@ -70,7 +64,7 @@
   <div id="ovHint">画面をタップすると閉じます</div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <script>
 // ★Apps Scriptのウェブアプリ URL（/exec で終わるもの）
 const API_URL = "https://script.google.com/macros/s/AKfycbzcnbxYctMOYa07qkPmSprKMhA4iSbN5mwnJqrd6Hc5OkIdk6ia79R7OSxlUhg45Xyn/exec";
@@ -165,35 +159,45 @@ document.getElementById("manualBtn").addEventListener("click", () => {
   if (v) { onScan(v, true); el.value = ""; }
 });
 
-// カメラ
+// カメラ（四角い枠の中のバーコードを読む）
 document.getElementById("start").addEventListener("click", async () => {
-  if (!window.ZXing) {
+  if (!window.Html5Qrcode) {
     show("ng", "読込エラー", "読み取り部品を取得できません。電波を確認してください", "");
     return;
   }
-  const hints = new Map();
-  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,
-            [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8]);
-  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  const reader = new ZXing.BrowserMultiFormatReader(hints, 150);
-  document.getElementById("cam").style.display = "block";
+  const scanner = new Html5Qrcode("reader", {
+    formatsToSupport: [
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.UPC_A
+    ],
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+    verbose: false
+  });
   try {
-    await reader.decodeFromConstraints(
-      { video: { facingMode: { ideal: "environment" },
-                 width: { ideal: 1920 }, height: { ideal: 1080 } } },
-      "video",
-      (result) => {
-        if (result) { onScan(result.getText(), false); return; }
+    await scanner.start(
+      { facingMode: "environment" },
+      {
+        fps: 15,
+        qrbox: (w, h) => ({ width: Math.floor(w * 0.92), height: Math.floor(Math.min(h, w) * 0.5) }),
+        videoConstraints: {
+          facingMode: "environment",
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          advanced: [{ focusMode: "continuous" }]
+        }
+      },
+      (text) => onScan(text, false),
+      () => {
         frames++;
-        if (frames % 15 === 0 && Date.now() - lastReadAt > 3000) {
-          setStatus("バーコードを探しています…（赤い線に合わせてください）");
+        if (frames % 30 === 0 && Date.now() - lastReadAt > 3000) {
+          setStatus("バーコードを探しています…（枠の中に入れてください）");
         }
       }
     );
-    setStatus("カメラ起動OK。バーコードを赤い線に合わせてください");
+    setStatus("カメラ起動OK。バーコードを枠の中に入れてください");
     document.getElementById("start").style.display = "none";
   } catch (e) {
-    document.getElementById("cam").style.display = "none";
     show("ng", "カメラ不可", "ブラウザのカメラ許可を確認してください", "");
   }
 });
