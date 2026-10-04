@@ -31,6 +31,7 @@
   .manual input { flex:1; font-size:18px; padding:10px; border-radius:6px; border:0; }
   button { font-size:16px; padding:10px 16px; border-radius:6px; border:0; }
   #start { margin:0 16px 16px; }
+  #status { text-align:center; font-size:14px; opacity:.85; padding:4px 16px; min-height:24px; }
   /* NG のときは画面いっぱいに大きく出す */
   #overlay { position:fixed; inset:0; z-index:10; display:none; flex-direction:column;
     align-items:center; justify-content:center; text-align:center; padding:24px;
@@ -51,6 +52,7 @@
   <video id="video" playsinline muted autoplay></video>
   <div id="guide"></div>
 </div>
+<div id="status">「カメラを開始」を押してください</div>
 <div id="result">
   <div id="mark">待機中</div>
   <div id="name">バーコードにカメラを向けてください</div>
@@ -85,7 +87,9 @@ const nameEl = document.getElementById("name");
 const countEl = document.getElementById("count");
 
 let busy = false;
-let lastJan = "", lastTime = 0;
+let lastJan = "", lastTime = 0, lastNg = false, lastReadAt = 0, frames = 0;
+const statusEl = document.getElementById("status");
+function setStatus(t) { statusEl.textContent = t; }
 
 const ov = document.getElementById("overlay");
 let ovTimer;
@@ -103,7 +107,7 @@ function show(cls, mark, name, count) {
     document.getElementById("ovName").textContent = name || "";
     document.getElementById("ovCount").textContent = count || "";
     ov.classList.add("show");
-    ovTimer = setTimeout(hideOverlay, 3000);
+    ovTimer = setTimeout(hideOverlay, 2000);
   } else {
     hideOverlay();
   }
@@ -121,22 +125,31 @@ function validJan(s) {
 }
 
 async function onScan(jan, manual) {
+  lastReadAt = Date.now();
   if (!validJan(jan)) {
+    setStatus("読み間違い（無視）: " + jan);
     if (manual) show("ng", "JANが違います", "桁数か数字を確認してください", jan);
     return; // カメラの読み間違いは無視して、次の読み取りを待つ
   }
+  setStatus("読み取り: " + jan);
   const now = Date.now();
-  if (busy || (jan === lastJan && now - lastTime < 2000)) return;
+  // 同じバーコードを連続で読んでも、画面が何度も出直さないようにする
+  // （NGのときは6秒、それ以外は2秒あける）
+  const gap = (jan === lastJan) ? (lastNg ? 6000 : 2000) : 0;
+  if (busy || now - lastTime < gap) return;
   busy = true; lastJan = jan; lastTime = now;
   try {
     const url = API_URL + "?course=" + encodeURIComponent(courseEl.value) +
                 "&jan=" + encodeURIComponent(jan);
     const r = await (await fetch(url)).json();
     if (r.result === "OK") {
+      lastNg = false;
       show("ok", "OK", r.name, r.done + " / " + r.plan);
     } else if (r.result === "OVER") {
+      lastNg = false;
       show("over", "多い", r.name, r.done + " / " + r.plan + "（予定数を超えます）");
     } else {
+      lastNg = true;
       show("ng", "商品が違います", "このコースの商品ではありません", jan);
     }
   } catch (e) {
@@ -169,8 +182,15 @@ document.getElementById("start").addEventListener("click", async () => {
       { video: { facingMode: { ideal: "environment" },
                  width: { ideal: 1920 }, height: { ideal: 1080 } } },
       "video",
-      (result) => { if (result) onScan(result.getText(), false); }
+      (result) => {
+        if (result) { onScan(result.getText(), false); return; }
+        frames++;
+        if (frames % 15 === 0 && Date.now() - lastReadAt > 3000) {
+          setStatus("バーコードを探しています…（赤い線に合わせてください）");
+        }
+      }
     );
+    setStatus("カメラ起動OK。バーコードを赤い線に合わせてください");
     document.getElementById("start").style.display = "none";
   } catch (e) {
     document.getElementById("cam").style.display = "none";
