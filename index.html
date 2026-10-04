@@ -31,6 +31,15 @@
   .manual input { flex:1; font-size:18px; padding:10px; border-radius:6px; border:0; }
   button { font-size:16px; padding:10px 16px; border-radius:6px; border:0; }
   #start { margin:0 16px 16px; }
+  /* NG のときは画面いっぱいに大きく出す */
+  #overlay { position:fixed; inset:0; z-index:10; display:none; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center; padding:24px;
+    background:var(--ng); color:#fff; }
+  #overlay.show { display:flex; }
+  #ovMark { font-size:11vw; font-weight:700; line-height:1.25; word-break:keep-all; }
+  #ovName { font-size:5vw; margin-top:16px; }
+  #ovCount { font-size:6vw; font-weight:700; margin-top:12px; }
+  #ovHint { font-size:3.5vw; margin-top:32px; opacity:.8; }
 </style>
 </head>
 <body>
@@ -52,6 +61,12 @@
   <button id="manualBtn">確認</button>
 </div>
 <button id="start">カメラを開始</button>
+<div id="overlay">
+  <div id="ovMark"></div>
+  <div id="ovName"></div>
+  <div id="ovCount"></div>
+  <div id="ovHint">画面をタップすると閉じます</div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script>
@@ -72,11 +87,26 @@ const countEl = document.getElementById("count");
 let busy = false;
 let lastJan = "", lastTime = 0;
 
+const ov = document.getElementById("overlay");
+let ovTimer;
+function hideOverlay() { ov.classList.remove("show"); }
+ov.addEventListener("click", hideOverlay);
+
 function show(cls, mark, name, count) {
   body.className = cls;
   markEl.textContent = mark;
   nameEl.textContent = name || "";
   countEl.textContent = count || "";
+  clearTimeout(ovTimer);
+  if (cls === "ng") {
+    document.getElementById("ovMark").textContent = mark;
+    document.getElementById("ovName").textContent = name || "";
+    document.getElementById("ovCount").textContent = count || "";
+    ov.classList.add("show");
+    ovTimer = setTimeout(hideOverlay, 3000);
+  } else {
+    hideOverlay();
+  }
   if (navigator.vibrate) navigator.vibrate(cls === "ok" ? 80 : [150, 80, 150]);
 }
 
