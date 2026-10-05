@@ -187,6 +187,68 @@ function decodeLum(reader, lum, w, h) {
   }
   return null;
 }
+// 縦方向だけ平均する。縦棒の境目は残したまま、ノイズとピントのぼけを減らせる
+function blurY(lum, W, H, r) {
+  const o = new Uint8ClampedArray(lum.length);
+  for (let x = 0; x < W; x++) {
+    let s = 0, c = 0;
+    for (let y = 0; y <= r && y < H; y++) { s += lum[y * W + x]; c++; }
+    for (let y = 0; y < H; y++) {
+      o[y * W + x] = s / c;
+      const a = y + r + 1, b = y - r;
+      if (a < H) { s += lum[a * W + x]; c++; }
+      if (b >= 0) { s -= lum[b * W + x]; c--; }
+    }
+  }
+  return o;
+}
+// 横方向だけ輪郭を強める。ぼけて細くつぶれた縦棒をはっきりさせる
+function sharpX(lum, W, H, r, amt) {
+  const o = new Uint8ClampedArray(lum.length);
+  for (let y = 0; y < H; y++) {
+    const row = y * W;
+    let s = 0, c = 0;
+    for (let x = 0; x <= r && x < W; x++) { s += lum[row + x]; c++; }
+    for (let x = 0; x < W; x++) {
+      o[row + x] = lum[row + x] + amt * (lum[row + x] - s / c);
+      const a = x + r + 1, b = x - r;
+      if (a < W) { s += lum[row + a]; c++; }
+      if (b >= 0) { s -= lum[row + b]; c--; }
+    }
+  }
+  return o;
+}
+// 縦棒の縞模様があるかを、数行だけ見て素早く判定する（縦に平均した画像で見る）。縞がなければ、重い補正は省く
+function looksLikeBars(lum, W, H) {
+  let hits = 0;
+  const rows = 24;
+  for (let k = 0; k < rows; k++) {
+    const y = Math.min(H - 1, Math.floor((k + 0.5) * H / rows));
+    let mn = 255, mx = 0;
+    for (let x = 0; x < W; x++) { const t = lum[y * W + x]; if (t < mn) mn = t; if (t > mx) mx = t; }
+    const range = mx - mn;
+    if (range < 10) continue;
+    const mid = (mx + mn) / 2, hy = Math.max(3, range * 0.1);
+    let dark = lum[y * W] < mid, edges = 0;
+    for (let x = 1; x < W; x++) {
+      const t = lum[y * W + x];
+      if (dark && t > mid + hy) { dark = false; edges++; }
+      else if (!dark && t < mid - hy) { dark = true; edges++; }
+    }
+    if (edges >= 10 && edges <= 200) hits++;
+  }
+  return hits >= 4;
+}
+// 1枚の画像を、そのまま／補正1／補正2 の順に試す。phase で重さを調整する
+function decodeBest(reader, lum, W, H, phase) {
+  let t = decodeLum(reader, lum, W, H);
+  if (t) return t;
+  const by6 = blurY(lum, W, H, 6);
+  if (!looksLikeBars(by6, W, H)) return null;   // 縞がなければ、重い補正は省く（何も映っていないとき、軽く済ませる）
+  t = decodeLum(reader, sharpX(by6, W, H, 4, 2), W, H);
+  if (t || phase % 2 === 0) return t;
+  return decodeLum(reader, sharpX(blurY(lum, W, H, 10), W, H, 6, 3), W, H);
+}
 // ==FAST-DECODER-END==
 
 let fastTimer = null;
@@ -209,14 +271,15 @@ function startFastDecoder(onCode) {
         const bw = rw * 0.92, bh = Math.min(rw, rh) * 0.5;
         const kx = video.videoWidth / rw, ky = video.videoHeight / rh;
         const sx = (rw - bw) / 2 * kx, sy = (rh - bh) / 2 * ky, sw = bw * kx, sh = bh * ky;
-        const base = Math.min(1, 1600 / sw);
-        const scale = (n++ % 2 === 0) ? base : base * 0.6;   // 1回おきに少し縮小して、ぼけに強くする
+        const base = Math.min(1, 1000 / sw);       // 横1000px前後が、速さと細かさのバランスが良い
+        const scale = (n % 2 === 0) ? base : base * 0.7;   // 1回おきに少し縮小して、ぼけに強くする
         const W = Math.max(1, Math.round(sw * scale)), H = Math.max(1, Math.round(sh * scale));
         canvas.width = W; canvas.height = H;
         ctx.drawImage(video, sx, sy, sw, sh, 0, 0, W, H);
         let text = null;
         if (det) { try { const r = await det.detect(canvas); if (r.length) text = r[0].rawValue; } catch (e) {} }
-        if (!text && zx) text = decodeLum(zx, toLum(ctx.getImageData(0, 0, W, H).data, W * H), W, H);
+        if (!text && zx) text = decodeBest(zx, toLum(ctx.getImageData(0, 0, W, H).data, W * H), W, H, n);
+        n++;
         if (text) onCode(text);
       }
     } catch (e) {}
